@@ -32,6 +32,17 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+# DataLoader workers (num_workers>0) deadlock on fork when OpenCV's internal
+# threadpool is live in the parent — a classic cv2 + fork hang that freezes
+# training right after "Loading train_dataloader...". Disabling cv2 threads in
+# the parent before any fork avoids it (keeps the default fork start method, so
+# no dataset-pickling requirement). Harmless if cv2 isn't the culprit.
+try:
+    import cv2
+    cv2.setNumThreads(0)
+except Exception:
+    pass
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET = REPO_ROOT / "datasets" / "maritime_rfdetr"
 
