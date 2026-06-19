@@ -28,6 +28,9 @@ env/
 # ── Personal / local (not project code) ──────────────────────────────────────
 CLAUDE.md
 
+# ── Internal team prep notes (strategy — keep out of a shared repo) ──────────
+question/*.pdf
+
 # ── OS / editor ──────────────────────────────────────────────────────────────
 .DS_Store
 *.swp
