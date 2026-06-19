@@ -64,8 +64,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--dataset-file", default="yolo", choices=["yolo", "roboflow"],
                    help="'yolo' = make_rfdetr_dataset.py output; 'roboflow' = COCO-format. "
                         "RF-DETR defaults to roboflow, so YOLO MUST be requested explicitly")
-    p.add_argument("--num-workers", type=int, default=8,
-                   help="dataloader workers; raise for large-image IO so the GPU isn't starved")
+    p.add_argument("--num-workers", type=int, default=16,
+                   help="dataloader workers; large-image decode is the bottleneck for small "
+                        "variants — scale toward CPU core count (e.g. 32+) so the GPU isn't starved")
     p.add_argument("--epochs", type=int, default=60)
     p.add_argument("--batch-size", type=int, default=4,
                    help="per-step batch; effective batch = batch_size * grad_accum_steps")
