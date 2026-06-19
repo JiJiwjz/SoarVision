@@ -20,10 +20,11 @@ Examples
     # Lightest variant for the Jetson real-time story
     python scripts/rfdetr_train.py --variant nano --epochs 60
 
-NOTE: RF-DETR's Python API evolves. The kwargs below follow the documented
-`.train(dataset_dir, epochs, batch_size, grad_accum_steps, ...)` shape; if the
-installed version rejects one, check `help(RFDETRBase.train)` and adjust here.
-Resolution MUST be divisible by 56 (ViT patch/window constraint).
+NOTE: kwargs verified against rfdetr 1.8.0's TrainConfig (lr/batch_size/
+grad_accum_steps/epochs/num_workers/output_dir/early_stopping/dataset_file).
+dataset_file MUST be "yolo" — RF-DETR defaults to COCO/roboflow. `resolution`
+is a model-constructor arg (not a train arg); RF-DETR validates its own
+per-variant divisibility constraint, so we don't pre-check it.
 """
 
 from __future__ import annotations
@@ -49,6 +50,11 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--variant", default="small", choices=list(VARIANTS))
     p.add_argument("--dataset-dir", default=str(DEFAULT_DATASET))
+    p.add_argument("--dataset-file", default="yolo", choices=["yolo", "roboflow"],
+                   help="'yolo' = make_rfdetr_dataset.py output; 'roboflow' = COCO-format. "
+                        "RF-DETR defaults to roboflow, so YOLO MUST be requested explicitly")
+    p.add_argument("--num-workers", type=int, default=8,
+                   help="dataloader workers; raise for large-image IO so the GPU isn't starved")
     p.add_argument("--epochs", type=int, default=60)
     p.add_argument("--batch-size", type=int, default=4,
                    help="per-step batch; effective batch = batch_size * grad_accum_steps")
@@ -67,9 +73,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
 
-    if args.resolution is not None and args.resolution % 56 != 0:
-        raise SystemExit(f"--resolution must be divisible by 56 (got {args.resolution})")
-
+    # RF-DETR validates the per-variant resolution constraint itself (varies by
+    # version/variant — square_resize_div_64 etc.), so don't pre-guess it here.
     dataset_dir = Path(args.dataset_dir)
     if not (dataset_dir / "data.yaml").exists():
         raise SystemExit(
@@ -89,9 +94,11 @@ def main() -> int:
 
     train_kwargs = {
         "dataset_dir": str(dataset_dir),
+        "dataset_file": args.dataset_file,   # 'yolo' — RF-DETR defaults to COCO/roboflow
         "epochs": epochs,
         "batch_size": args.batch_size,
         "grad_accum_steps": args.grad_accum_steps,
+        "num_workers": args.num_workers,
         "output_dir": output_dir,
         "early_stopping": args.early_stopping,
     }
