@@ -1,0 +1,35 @@
+# ── Data ───────────────────────────────────────────────────────────────────
+# Self-collected / external maritime dataset (~12 GB incl. a 5.5 GB zip).
+# Tracked out-of-band, never in git. Regenerate via the data prep pipeline.
+datasets/
+
+# ── Training & evaluation outputs ────────────────────────────────────────────
+runs/
+wandb/
+*.log
+
+# ── Model artifacts (use GitHub Releases / external storage, not git) ────────
+*.pt
+*.pth
+*.onnx
+*.engine
+*.trt
+*.plan
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# ── Personal / local (not project code) ──────────────────────────────────────
+CLAUDE.md
+
+# ── OS / editor ──────────────────────────────────────────────────────────────
+.DS_Store
+*.swp
+.idea/
+.vscode/
