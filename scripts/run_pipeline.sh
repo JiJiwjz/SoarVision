@@ -17,6 +17,7 @@ export PYTHONPATH=scripts
 say() { echo "[$(date +%F_%H:%M:%S)] $*"; }
 HIRES=runs/rfdetr/nano_hires896
 SMALL=runs/rfdetr/small_hires896
+MEDIUM=runs/rfdetr/medium_hires896
 
 eval_run() {  # $1 = run dir, $2 = variant
   local dir="$1" variant="$2" ck="$1/checkpoint_best_total.pth"
@@ -49,5 +50,16 @@ say "small@896 training step returned."
 # 3) eval small@896 (whatever best it reached)
 say "=== STEP 3: eval small@896 ==="
 eval_run "$SMALL" small
+
+# 4) train medium@896 (weights pre-cached; smaller batch for memory; partial-OK)
+say "=== STEP 4: train medium@896 ==="
+$PY scripts/rfdetr_train.py --variant medium --dataset-dir datasets/maritime_rfdetr_hires \
+    --resolution 896 --epochs 50 --num-workers 24 --batch-size 2 --grad-accum-steps 8 \
+    --early-stopping --output-dir "$MEDIUM" || say "medium@896 train FAILED/cut"
+say "medium@896 training step returned."
+
+# 5) eval medium@896
+say "=== STEP 5: eval medium@896 ==="
+eval_run "$MEDIUM" medium
 
 say "PIPELINE DONE — all queued jobs complete. Release the instance from the AutoDL panel."
