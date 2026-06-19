@@ -55,6 +55,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--map-threshold", type=float, default=0.05, help="low conf to collect mAP candidates")
     p.add_argument("--iou", type=float, default=0.5, help="IoU for the custom matching pass")
     p.add_argument("--num-classes", type=int, default=len(CLASS_NAMES))
+    p.add_argument("--optimize", action="store_true",
+                   help="call optimize_for_inference() — can hang on the deformable-attn trace; off by default")
     p.add_argument("--limit", type=int, default=0, help="cap #images (0=all) for quick checks")
     p.add_argument("--save-dir", default=None, help="default: alongside the weights")
     return p.parse_args()
@@ -85,10 +87,11 @@ def main() -> int:
     model = getattr(rfdetr, VARIANTS[args.variant])(
         pretrain_weights=args.weights, num_classes=args.num_classes
     )
-    try:
-        model.optimize_for_inference()
-    except Exception as e:  # noqa: BLE001 — optimization is best-effort
-        print(f"[eval] optimize_for_inference skipped: {e}")
+    if args.optimize:
+        try:
+            model.optimize_for_inference()
+        except Exception as e:  # noqa: BLE001 — optimization is best-effort
+            print(f"[eval] optimize_for_inference skipped: {e}")
 
     imgs = list_images(images_dir(args.split))
     if args.limit:
