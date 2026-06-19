@@ -1,46 +1,67 @@
 # ============================================================================
-# SoarVision · YOLO26 maritime detector — Python dependencies
-# Target: Python 3.10–3.12, NVIDIA GPU.
-# A800-80GB (Ampere, sm_80) on a CUDA 13.0 driver: any torch>=2.x works; cu128
-# wheels are backward-compatible with the CUDA 13 driver. Latest on the cu128
-# index is currently 2.8.0 — that's the install target on the A800 box.
+# 翱翔智眸 (SoarVision) · maritime target detector — Python dependencies
+# Detectors: RF-DETR (main line) + YOLO26n (lightweight baseline).
+# Train box: RTX 5090D / A800 etc.   Deploy box: Jetson Orin Nano (JetPack).
+# Python 3.10–3.12, NVIDIA GPU.
+#
+# Install order:  torch (from CUDA index)  ->  this file.
 # ============================================================================
 
 # ---------------------------------------------------------------------------
 # PyTorch — install SEPARATELY and BEFORE this file, from the CUDA index (NOT
-# from a generic PyPI mirror like aliyun, which has no CUDA torch wheels):
-#   pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu128
-# Left commented so `pip install -r requirements.txt` never tries to pull torch
-# from the configured mirror. ultralytics below requires torch — so torch MUST
-# already be installed when you run this file, otherwise pip refetches it and fails.
+# a generic PyPI mirror like aliyun, which ships no CUDA wheels).
+#
+#   RTX 5090D is Blackwell (compute capability sm_120) — it REQUIRES cu128
+#   (CUDA 12.8) wheels or newer; older cu121/cu118 torch will not run on it.
+#     pip install torch==2.8.0 torchvision==0.23.0 \
+#         --index-url https://download.pytorch.org/whl/cu128
+#
+#   (A800 / Ampere sm_80 also works with the same cu128 wheels.)
+#
+# Left commented so `pip install -r requirements.txt` never refetches a CPU
+# torch from the mirror. torch MUST already be importable with CUDA when you
+# run this file, or ultralytics/rfdetr below will pull a CPU wheel and fail.
 # ---------------------------------------------------------------------------
 # torch>=2.7
 # torchvision>=0.22
 
 # ---------------------------------------------------------------------------
-# Core — YOLO26 (needs a Jan-2026+ release that ships the YOLO26 models).
-# Pulls in opencv-python, pillow, pyyaml, tqdm, matplotlib, pandas, numpy, scipy.
-# ---------------------------------------------------------------------------
-ultralytics>=8.3.0
-
-# ---------------------------------------------------------------------------
-# RF-DETR — main detector line (Roboflow real-time DETR; ingests COCO or YOLO).
-# Pulls its own torch/torchvision pins, so install torch from the CUDA index
-# FIRST to avoid a CPU-wheel downgrade. Pin the exact version you train with for
-# reproducibility. rfdetr[plus] only adds the XL/2XL variants (not Jetson targets).
+# RF-DETR — MAIN detector (Roboflow real-time DETR; ingests COCO or YOLO).
+# Pulls its own torch/torchvision/timm/transformers/pycocotools/supervision.
+# Because it can drag torch, install the cu128 torch FIRST; then verify CUDA
+# survived: python -c "import torch; print(torch.cuda.is_available())".
+# Pin the EXACT version you train with for reproducibility (rfdetr[plus] only
+# adds the XL/2XL variants — not Jetson targets, skip them).
 # ---------------------------------------------------------------------------
 rfdetr
 
 # ---------------------------------------------------------------------------
-# D1 online degradation augmentation (fog / low-light / noise).
-# NOT an ultralytics dependency — must be installed explicitly.
-# scripts/d1_degrade.py tolerates both 1.3 and 1.4+ kwarg names.
+# YOLO26 — lightweight BASELINE for the model-comparison ablation
+# (needs a Jan-2026+ release that ships the YOLO26 models).
+# Pulls opencv-python, pillow, pyyaml, tqdm, matplotlib, pandas, numpy, scipy.
+# ---------------------------------------------------------------------------
+ultralytics>=8.3.0
+
+# ---------------------------------------------------------------------------
+# Degradation augmentation (fog / low-light / noise) — anti-interference line.
+# Used by scripts/d1_degrade.py (YOLO) and the maritime degradation module;
+# tolerates both 1.3 and 1.4+ kwarg names.
 # ---------------------------------------------------------------------------
 albumentations>=1.4.0
 
 # ---------------------------------------------------------------------------
+# Export / deployment — .pt/.pth -> ONNX -> TensorRT (Jetson real-time line).
+# onnxruntime-gpu for desktop sanity checks; on Jetson use the JetPack-provided
+# TensorRT + onnxruntime build (do NOT pip-install TensorRT — it comes with JetPack).
+# ---------------------------------------------------------------------------
+onnx>=1.16
+onnxruntime-gpu>=1.18
+pycocotools>=2.0.7        # COCO mAP eval (also an rfdetr dep; pinned for clarity)
+
+# ---------------------------------------------------------------------------
 # Analysis scripts (eval / compare_runs / eval_robustness / gallery /
-# make_degraded_testset). Most are already ultralytics deps; pinned for clarity.
+# make_degraded_testset / make_rfdetr_dataset). Mostly already pulled above;
+# pinned here for clarity / standalone use.
 # ---------------------------------------------------------------------------
 numpy>=1.26
 opencv-python>=4.9
