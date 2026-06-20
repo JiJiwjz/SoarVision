@@ -55,6 +55,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--map-threshold", type=float, default=0.05, help="low conf to collect mAP candidates")
     p.add_argument("--iou", type=float, default=0.5, help="IoU for the custom matching pass")
     p.add_argument("--num-classes", type=int, default=len(CLASS_NAMES))
+    p.add_argument("--resolution", type=int, default=None,
+                   help="MUST match the checkpoint's training resolution (e.g. 896 for a 896-trained "
+                        "model) — evaluating a hi-res model at the default res silently butchers small-object recall")
     p.add_argument("--optimize", action="store_true",
                    help="call optimize_for_inference() — can hang on the deformable-attn trace; off by default")
     p.add_argument("--limit", type=int, default=0, help="cap #images (0=all) for quick checks")
@@ -84,9 +87,10 @@ def main() -> int:
 
     import rfdetr
 
-    model = getattr(rfdetr, VARIANTS[args.variant])(
-        pretrain_weights=args.weights, num_classes=args.num_classes
-    )
+    ctor_kwargs = {"pretrain_weights": args.weights, "num_classes": args.num_classes}
+    if args.resolution is not None:
+        ctor_kwargs["resolution"] = args.resolution
+    model = getattr(rfdetr, VARIANTS[args.variant])(**ctor_kwargs)
     if args.optimize:
         try:
             model.optimize_for_inference()
