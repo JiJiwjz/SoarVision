@@ -37,6 +37,10 @@ def parse_args():
     p.add_argument("--split", default="test", choices=["train", "val", "test"])
     p.add_argument("--num", type=int, default=12, help="frames to render (evenly sampled)")
     p.add_argument("--conf", type=float, default=0.3)
+    p.add_argument("--resolution", type=int, default=None,
+                   help="MUST match the checkpoint's training resolution (e.g. 896) — "
+                        "predicting a hi-res model at the default res artificially kills "
+                        "small-object detections (same trap as rfdetr_eval.py)")
     p.add_argument("--num-classes", type=int, default=len(CLASS_NAMES))
     p.add_argument("--no-gt", action="store_false", dest="gt", help="preds only (no GT panel)")
     p.add_argument("--out-dir", default=None, help="default: <weights>/../viz")
@@ -61,9 +65,10 @@ def main() -> int:
     out_dir = Path(args.out_dir) if args.out_dir else Path(args.weights).resolve().parent / "viz"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    model = getattr(rfdetr, VARIANTS[args.variant])(
-        pretrain_weights=args.weights, num_classes=args.num_classes
-    )
+    ctor_kwargs = {"pretrain_weights": args.weights, "num_classes": args.num_classes}
+    if args.resolution is not None:
+        ctor_kwargs["resolution"] = args.resolution
+    model = getattr(rfdetr, VARIANTS[args.variant])(**ctor_kwargs)
     box_ann = sv.BoxAnnotator(thickness=2)
     lbl_ann = sv.LabelAnnotator(text_scale=0.5, text_thickness=1)
 
