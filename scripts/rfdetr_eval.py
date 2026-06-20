@@ -13,6 +13,9 @@ Eval runs on the ORIGINAL-resolution split (datasets/Maritime_Detection_YOLO), n
 the 640 training copy — the model square-resizes internally, so native frames are
 the fair test. class_id from RF-DETR predict is 0-indexed and matches CLASS_NAMES.
 
+The core (build_model / run_eval) is importable so rfdetr_robustness.py can load the
+model once and evaluate many degraded conditions without reloading.
+
 Usage
 -----
     python scripts/rfdetr_eval.py \
@@ -80,43 +83,43 @@ def coco_map(coco_gt: dict, dets: list) -> dict:
     return {"mAP50_95": float(e.stats[0]), "mAP50": float(e.stats[1]), "mAP75": float(e.stats[2])}
 
 
-def main() -> int:
-    args = parse_args()
-    save_dir = Path(args.save_dir) if args.save_dir else Path(args.weights).resolve().parent / "eval"
-    save_dir.mkdir(parents=True, exist_ok=True)
-
+def build_model(variant: str, weights: str, num_classes: int = len(CLASS_NAMES),
+                resolution: int | None = None, optimize: bool = False):
+    """Construct an RF-DETR from a checkpoint. resolution MUST match training res."""
     import rfdetr
 
-    ctor_kwargs = {"pretrain_weights": args.weights, "num_classes": args.num_classes}
-    if args.resolution is not None:
-        ctor_kwargs["resolution"] = args.resolution
-    model = getattr(rfdetr, VARIANTS[args.variant])(**ctor_kwargs)
-    if args.optimize:
+    ctor_kwargs = {"pretrain_weights": weights, "num_classes": num_classes}
+    if resolution is not None:
+        ctor_kwargs["resolution"] = resolution
+    model = getattr(rfdetr, VARIANTS[variant])(**ctor_kwargs)
+    if optimize:
         try:
             model.optimize_for_inference()
         except Exception as e:  # noqa: BLE001 — optimization is best-effort
             print(f"[eval] optimize_for_inference skipped: {e}")
+    return model
 
-    imgs = list_images(images_dir(args.split))
-    if args.limit:
-        imgs = imgs[: args.limit]
-    ldir = labels_dir(args.split)
-    nc = args.num_classes
 
-    # COCO accumulators (category ids 1-indexed per COCO convention).
+def run_eval(model, imgs: list[Path], ldir: Path, num_classes: int = len(CLASS_NAMES),
+             conf: float = 0.25, iou: float = 0.5, map_threshold: float = 0.05,
+             progress: bool = True) -> dict:
+    """Evaluate an already-built model over an explicit image list + label dir.
+
+    Returns the metrics dict (mAP / per_class / recall_by_size / overall). Reusable
+    across degraded conditions — the model is NOT reloaded here."""
+    nc = num_classes
+
     coco_gt = {"images": [], "annotations": [],
                "categories": [{"id": c + 1, "name": n} for c, n in enumerate(CLASS_NAMES)]}
     dets: list = []
     ann_id = 1
 
-    # Custom operating-point accumulators.
     tp = np.zeros(nc, dtype=np.int64)
     fp = np.zeros(nc, dtype=np.int64)
     n_gt = np.zeros(nc, dtype=np.int64)
     bucket_gt = {b: 0 for b in ("small", "medium", "large")}
     bucket_hit = {b: 0 for b in ("small", "medium", "large")}
 
-    print(f"[eval] {len(imgs)} images, variant={args.variant}, weights={args.weights}")
     for idx, img_path in enumerate(imgs):
         w, h = Image.open(img_path).size
         coco_gt["images"].append({"id": idx, "width": w, "height": h, "file_name": img_path.name})
@@ -130,7 +133,7 @@ def main() -> int:
             })
             ann_id += 1
 
-        det = model.predict(str(img_path), threshold=args.map_threshold)
+        det = model.predict(str(img_path), threshold=map_threshold)
         if det.xyxy is not None and len(det.xyxy):
             pb = np.asarray(det.xyxy, dtype=np.float32)
             pc = np.asarray(det.class_id, dtype=int)
@@ -144,12 +147,11 @@ def main() -> int:
                          "bbox": [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
                          "score": float(pconf[k])})
 
-        # Operating-point pass: keep conf>=args.conf, high-conf first for greedy match.
-        keep = pconf >= args.conf
+        keep = pconf >= conf
         opb, opc, oconf = pb[keep], pc[keep], pconf[keep]
         order = np.argsort(-oconf)
         opb, opc = opb[order], opc[order]
-        tp_mask, fp_mask, gt_matched = match_preds_to_gt(gt, opb, opc, iou_thr=args.iou)
+        tp_mask, fp_mask, gt_matched = match_preds_to_gt(gt, opb, opc, iou_thr=iou)
         for c in range(nc):
             tp[c] += int(((opc == c) & tp_mask).sum())
             fp[c] += int(((opc == c) & fp_mask).sum())
@@ -160,7 +162,7 @@ def main() -> int:
             if gt_matched[gi]:
                 bucket_hit[b] += 1
 
-        if (idx + 1) % 500 == 0:
+        if progress and (idx + 1) % 500 == 0:
             print(f"[eval]   {idx + 1}/{len(imgs)}")
 
     overall_map = coco_map(coco_gt, dets)
@@ -176,25 +178,50 @@ def main() -> int:
         }
     recall_by_size = {b: (bucket_hit[b] / bucket_gt[b] if bucket_gt[b] else None) for b in bucket_gt}
 
-    report = {
-        "weights": args.weights, "variant": args.variant, "split": args.split,
-        "conf": args.conf, "iou": args.iou,
-        "mAP": overall_map,
-        "per_class": per_class,
-        "recall_by_size": recall_by_size,
-        "size_gt_counts": bucket_gt,
+    tot_tp, tot_fp, tot_gt = int(tp.sum()), int(fp.sum()), int(n_gt.sum())
+    overall = {
+        "recall": tot_tp / tot_gt if tot_gt else 0.0,
+        "miss_rate": 1 - (tot_tp / tot_gt) if tot_gt else 0.0,
+        "false_discovery_rate": 1 - (tot_tp / (tot_tp + tot_fp)) if (tot_tp + tot_fp) else 0.0,
     }
 
-    print("\n=== RF-DETR eval ===")
-    print(f"mAP50={overall_map['mAP50']:.4f}  mAP50-95={overall_map['mAP50_95']:.4f}  mAP75={overall_map['mAP75']:.4f}")
-    print(f"\n{'class':<12}{'miss%(漏检)':>14}{'误检%':>10}{'recall':>9}{'prec':>8}{'GT':>8}")
-    for name, m in per_class.items():
-        print(f"{name:<12}{m['miss_rate']*100:>14.1f}{m['false_discovery_rate']*100:>10.1f}"
-              f"{m['recall']*100:>9.1f}{m['precision']*100:>8.1f}{m['gt']:>8}")
-    print("\nrecall by size bucket:")
-    for b, v in recall_by_size.items():
-        print(f"  {b:<8}{'n/a' if v is None else f'{v*100:.1f}%':>8}  (GT={bucket_gt[b]})")
+    return {
+        "conf": conf, "iou": iou, "n_images": len(imgs),
+        "mAP": overall_map, "overall": overall,
+        "per_class": per_class, "recall_by_size": recall_by_size, "size_gt_counts": bucket_gt,
+    }
 
+
+def print_report(report: dict) -> None:
+    m = report["mAP"]
+    print("\n=== RF-DETR eval ===")
+    print(f"mAP50={m['mAP50']:.4f}  mAP50-95={m['mAP50_95']:.4f}  mAP75={m['mAP75']:.4f}")
+    print(f"\n{'class':<12}{'miss%(漏检)':>14}{'误检%':>10}{'recall':>9}{'prec':>8}{'GT':>8}")
+    for name, mc in report["per_class"].items():
+        print(f"{name:<12}{mc['miss_rate']*100:>14.1f}{mc['false_discovery_rate']*100:>10.1f}"
+              f"{mc['recall']*100:>9.1f}{mc['precision']*100:>8.1f}{mc['gt']:>8}")
+    print("\nrecall by size bucket:")
+    for b, v in report["recall_by_size"].items():
+        print(f"  {b:<8}{'n/a' if v is None else f'{v*100:.1f}%':>8}  (GT={report['size_gt_counts'][b]})")
+
+
+def main() -> int:
+    args = parse_args()
+    save_dir = Path(args.save_dir) if args.save_dir else Path(args.weights).resolve().parent / "eval"
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    model = build_model(args.variant, args.weights, args.num_classes, args.resolution, args.optimize)
+
+    imgs = list_images(images_dir(args.split))
+    if args.limit:
+        imgs = imgs[: args.limit]
+    print(f"[eval] {len(imgs)} images, variant={args.variant}, weights={args.weights}")
+
+    report = run_eval(model, imgs, labels_dir(args.split), args.num_classes,
+                      args.conf, args.iou, args.map_threshold)
+    report = {"weights": args.weights, "variant": args.variant, "split": args.split, **report}
+
+    print_report(report)
     out = save_dir / f"rfdetr_eval_{args.split}.json"
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"\n[eval] saved -> {out}")
