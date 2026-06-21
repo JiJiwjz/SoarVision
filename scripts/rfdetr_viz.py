@@ -1,16 +1,24 @@
 """
-Visualize RF-DETR predictions on sample frames — side-by-side GT (left) vs
-prediction (right) panels, so misses/false-positives are obvious at a glance.
-Great for eyeballing the small-object problem and for 答辩 result figures.
+Visualize RF-DETR predictions — GT (left) vs prediction panels, so misses/false-
+positives are obvious at a glance. Supports TWO models side by side (e.g. baseline vs
++D1) and an arbitrary image dir (e.g. a degraded condition), so you can show
+"baseline misses the ship in fog, D1 still finds it" — the qualitative 答辩 figure.
 
-Samples frames evenly across the split so both SeaShips (big vessels) and
-SMD-VIS (small boats / buoys / distant targets) are covered.
+Panels per frame: GT | PRED(model1) [ | PRED(model2) ].
 
 Usage
 -----
-    python scripts/rfdetr_viz.py --weights runs/rfdetr/nano_base640/checkpoint_best_total.pth \
-        --variant nano --num 12 --out-dir runs/rfdetr/nano_base640/viz
-    python scripts/rfdetr_viz.py --weights best.pth --variant nano --no-gt   # preds only
+    # single model on the clean test split
+    python scripts/rfdetr_viz.py --weights best.pth --variant small --resolution 896 --num 12
+
+    # baseline vs D1 on the HEAVY-FOG degraded set
+    python scripts/rfdetr_viz.py \
+        --weights  runs/rfdetr/small_hires896_v2/checkpoint_best_total.pth --variant  small \
+        --weights2 runs/rfdetr/small_d1_896/checkpoint_best_total.pth      --variant2 small \
+        --resolution 896 --resolution2 896 \
+        --images-dir datasets/Maritime_Degraded/fog_heavy/images \
+        --labels-dir datasets/Maritime_Degraded/fog_heavy/labels \
+        --num 12 --out-dir runs/rfdetr/viz_fog_compare
 """
 
 from __future__ import annotations
@@ -24,23 +32,28 @@ import numpy as np
 from _common import (
     CLASS_NAMES, images_dir, labels_dir, label_path_for, list_images, load_gt,
 )
+from rfdetr_eval import VARIANTS, build_model
 
-VARIANTS = {"nano": "RFDETRNano", "small": "RFDETRSmall", "medium": "RFDETRMedium",
-            "base": "RFDETRBase", "large": "RFDETRLarge"}
-GT_COLOR = (0, 255, 0)  # green
+GT_COLOR = (0, 255, 0)  # green (BGR)
 
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--weights", required=True)
     p.add_argument("--variant", default="nano", choices=list(VARIANTS))
-    p.add_argument("--split", default="test", choices=["train", "val", "test"])
-    p.add_argument("--num", type=int, default=12, help="frames to render (evenly sampled)")
-    p.add_argument("--conf", type=float, default=0.3)
     p.add_argument("--resolution", type=int, default=None,
                    help="MUST match the checkpoint's training resolution (e.g. 896) — "
-                        "predicting a hi-res model at the default res artificially kills "
-                        "small-object detections (same trap as rfdetr_eval.py)")
+                        "a hi-res model at the default res artificially kills small-object detections")
+    p.add_argument("--weights2", default=None, help="optional 2nd model -> a 3rd panel (e.g. +D1)")
+    p.add_argument("--variant2", default="small", choices=list(VARIANTS))
+    p.add_argument("--resolution2", type=int, default=None)
+    p.add_argument("--label1", default="PRED", help="caption for model1 panel")
+    p.add_argument("--label2", default="PRED2", help="caption for model2 panel")
+    p.add_argument("--split", default="test", choices=["train", "val", "test"])
+    p.add_argument("--images-dir", default=None, help="override: e.g. a degraded condition's images/")
+    p.add_argument("--labels-dir", default=None, help="override labels dir (defaults next to --images-dir)")
+    p.add_argument("--num", type=int, default=12, help="frames to render (evenly sampled)")
+    p.add_argument("--conf", type=float, default=0.3)
     p.add_argument("--num-classes", type=int, default=len(CLASS_NAMES))
     p.add_argument("--no-gt", action="store_false", dest="gt", help="preds only (no GT panel)")
     p.add_argument("--out-dir", default=None, help="default: <weights>/../viz")
@@ -57,50 +70,58 @@ def draw_gt(img, gt):
     return out
 
 
+def annotate_pred(img, det, box_ann, lbl_ann, caption):
+    panel = box_ann.annotate(scene=img.copy(), detections=det)
+    if len(det) > 0:
+        labels = [f"{CLASS_NAMES[int(c)]} {s:.2f}" for c, s in zip(det.class_id, det.confidence)]
+        panel = lbl_ann.annotate(scene=panel, detections=det, labels=labels)
+    cv2.putText(panel, f"{caption} ({len(det)})", (8, 26),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+    return panel
+
+
 def main() -> int:
     args = parse_args()
     import supervision as sv
-    import rfdetr
 
     out_dir = Path(args.out_dir) if args.out_dir else Path(args.weights).resolve().parent / "viz"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    ctor_kwargs = {"pretrain_weights": args.weights, "num_classes": args.num_classes}
-    if args.resolution is not None:
-        ctor_kwargs["resolution"] = args.resolution
-    model = getattr(rfdetr, VARIANTS[args.variant])(**ctor_kwargs)
+    model = build_model(args.variant, args.weights, args.num_classes, args.resolution)
+    model2 = (build_model(args.variant2, args.weights2, args.num_classes, args.resolution2)
+              if args.weights2 else None)
+
     box_ann = sv.BoxAnnotator(thickness=2)
     lbl_ann = sv.LabelAnnotator(text_scale=0.5, text_thickness=1)
 
-    imgs = list_images(images_dir(args.split))
+    img_root = Path(args.images_dir) if args.images_dir else images_dir(args.split)
+    ldir = Path(args.labels_dir) if args.labels_dir else (
+        img_root.parent / "labels" if args.images_dir else labels_dir(args.split))
+    imgs = list_images(img_root)
+    if not imgs:
+        print(f"[viz] no images under {img_root}")
+        return 1
     idxs = sorted(set(np.linspace(0, len(imgs) - 1, args.num).astype(int)))
     sel = [imgs[i] for i in idxs]
-    ldir = labels_dir(args.split)
-    print(f"[viz] {len(sel)} frames from split={args.split}, conf={args.conf}")
+    print(f"[viz] {len(sel)} frames from {img_root}, conf={args.conf}, 2-model={bool(model2)}")
 
     for p in sel:
         img = cv2.imread(str(p))
         if img is None:
             continue
-        det = model.predict(str(p), threshold=args.conf)
-        pred_panel = box_ann.annotate(scene=img.copy(), detections=det)
-        if len(det) > 0:
-            labels = [f"{CLASS_NAMES[int(c)]} {s:.2f}" for c, s in zip(det.class_id, det.confidence)]
-            pred_panel = lbl_ann.annotate(scene=pred_panel, detections=det, labels=labels)
-        cv2.putText(pred_panel, f"PRED ({len(det)})", (8, 26),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-
+        det1 = model.predict(str(p), threshold=args.conf)
+        panels = []
         if args.gt:
-            h, w = img.shape[:2]
-            gt = load_gt(label_path_for(p, ldir), w, h)
+            gt = load_gt(label_path_for(p, ldir), img.shape[1], img.shape[0])
             gt_panel = draw_gt(img, gt)
             cv2.putText(gt_panel, f"GT ({len(gt)})", (8, 26),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            panel = np.hstack([gt_panel, pred_panel])
-        else:
-            panel = pred_panel
-
-        cv2.imwrite(str(out_dir / f"{p.stem}.jpg"), panel)
+            panels.append(gt_panel)
+        panels.append(annotate_pred(img, det1, box_ann, lbl_ann, args.label1))
+        if model2 is not None:
+            det2 = model2.predict(str(p), threshold=args.conf)
+            panels.append(annotate_pred(img, det2, box_ann, lbl_ann, args.label2))
+        cv2.imwrite(str(out_dir / f"{p.stem}.jpg"), np.hstack(panels))
 
     print(f"[viz] saved -> {out_dir}")
     return 0
