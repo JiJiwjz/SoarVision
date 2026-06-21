@@ -218,7 +218,8 @@ def list_frames(root: Path, split: str | None = None) -> list[str]:
     if split:
         for cand in (root / "ImageSets" / f"{split}.txt", root / f"{split}.txt"):
             if cand.exists():
-                return [ln.strip() for ln in cand.read_text().splitlines() if ln.strip()]
+                # lines may be bare stems ("47991") or paths ("./images/47991.jpg")
+                return [Path(ln.strip()).stem for ln in cand.read_text().splitlines() if ln.strip()]
     img_dir = root / "image"
     if not img_dir.exists():
         return []

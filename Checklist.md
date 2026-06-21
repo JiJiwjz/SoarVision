@@ -23,8 +23,7 @@
 
 > 赛题创新轴第一项就是"多模态融合",场景立论就是"光学失效→上雷达"。**这是国特的命门。**
 
-- [ ] **A1 · WaterScenes 数据落地**:解压各组件 zip 到 `datasets/WaterScenes/`(image/radar/detection/yolo/calib + train/val/test.txt 放根),跑 `radar/waterscenes.py --validate`。
-  - **验收**:类别顺序/帧数正确;`radar/visualize.py` 出的叠图里**雷达点确实落在船/浮标上**(对齐正确)。
+- [x] **A1 · WaterScenes 数据落地**:解压各组件 zip 到 `datasets/WaterScenes/`,跑 `radar/waterscenes.py --validate`。✅ 本地校验通过(7类/划分 train37884·val10824·test5412);**雷达点对齐确认**(frame 29543 雷达点精准落在远岸货船上,无系统偏移)。修复:`list_frames` 用 `Path().stem` 兼容 `./images/<id>.jpg` 路径格式。
 - [ ] **A2 · REVP 归一化标定**:据真实 range/doppler/power 直方图调 `radar/revp.RevpNorm`。
   - **验收**:5 通道(range/elev/doppler/power/occupancy)分布合理、可视化有信息、非全 0/全饱和。
 - [ ] **A3 · RF-DETR decoder 雷达 cross-attention(RGQ)**:REVP 特征作 K/V,object queries 软关联(TransCAR 路线),留置信门控接口。
