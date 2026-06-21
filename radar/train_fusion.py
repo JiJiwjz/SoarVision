@@ -20,9 +20,11 @@ boxes ARE cxcywh-normalised, so they drop straight in.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 import numpy as np
 import torch
+from PIL import Image
 from torch import nn
 
 IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1)
@@ -111,17 +113,115 @@ def _smoke(variant: str, device: str) -> int:
     return 0
 
 
+class WaterScenesDS:
+    """torch Dataset over WaterScenes: returns (image_uint8 HWC, revp [5,h,w], boxes[N,5])."""
+
+    def __init__(self, root, split, downsample=8):
+        import waterscenes as ws
+        self.ws = ws
+        self.root = Path(root)
+        self.ds = downsample
+        self.cls = ws.load_classes(self.root)
+        self.ids = ws.list_frames(self.root, split)
+
+    def __len__(self):
+        return len(self.ids)
+
+    def __getitem__(self, i):
+        from revp import build_from_points
+        fr = self.ws.load_frame(self.root, self.ids[i], self.cls)
+        img = np.asarray(Image.open(fr.image_path).convert("RGB"))
+        h, w = img.shape[:2]
+        revp = build_from_points(fr.radar, w, h, downsample=self.ds)   # [5, h/ds, w/ds]
+        return img, revp.astype(np.float32), fr.boxes.astype(np.float32)
+
+
+def collate_fusion(batch, res, device):
+    imgs, revps, boxes = zip(*batch)
+    samples = preprocess_images(list(imgs), res, device)
+    targets = make_targets(list(boxes), device)
+    revp = torch.from_numpy(np.stack(revps)).to(device)
+    return samples, targets, revp
+
+
+def train(args) -> int:
+    from functools import partial
+
+    import integrate
+
+    dev = args.device
+    m, lwdetr, criterion = build(args.variant, num_classes=3, resolution=args.resolution, device=dev)
+    radar_on = not args.radar_off
+    if not radar_on:
+        integrate.clear_radar(m)  # baseline arm: fusion present but never fed -> pure RGB
+
+    ds = WaterScenesDS(args.root, args.split, downsample=8)
+    print(f"[train] {len(ds)} frames, variant={args.variant}, radar={'ON' if radar_on else 'OFF'}, "
+          f"res={args.resolution}, epochs={args.epochs}")
+    loader = torch.utils.data.DataLoader(
+        ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers,
+        collate_fn=partial(collate_fusion, res=args.resolution, device="cpu"), drop_last=True)
+
+    # param groups: fusion params at full LR; detector fine-tuned at a lower LR
+    fusion_ids = {id(p) for p in integrate.radar_parameters(m)}
+    det_params = [p for p in lwdetr.parameters() if id(p) not in fusion_ids and p.requires_grad]
+    fus_params = list(integrate.radar_parameters(m))
+    opt = torch.optim.AdamW(
+        [{"params": fus_params, "lr": args.lr},
+         {"params": det_params, "lr": args.lr * args.det_lr_mult}], weight_decay=1e-4)
+
+    out = Path(args.output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    wd = criterion.weight_dict
+    step = 0
+    for ep in range(args.epochs):
+        for samples, targets, revp in loader:
+            samples = samples.to(dev)
+            targets = [{k: v.to(dev) for k, v in t.items()} for t in targets]
+            if radar_on:
+                integrate.stash_radar(m, revp.to(dev))
+            outputs = lwdetr(samples, targets)
+            ld = criterion(outputs, targets)
+            loss = weighted_loss(ld, wd)
+            opt.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(lwdetr.parameters(), 0.1)
+            opt.step()
+            if step % 50 == 0:
+                print(f"[train] ep{ep} step{step} loss={loss.item():.3f}", flush=True)
+            step += 1
+            if args.max_steps and step >= args.max_steps:
+                print(f"[train] hit --max-steps {args.max_steps}, stopping early")
+                torch.save({"model": lwdetr.state_dict(), "epoch": ep, "radar_on": radar_on},
+                           out / "checkpoint_last.pth")
+                return 0
+        torch.save({"model": lwdetr.state_dict(), "epoch": ep, "radar_on": radar_on},
+                   out / "checkpoint_last.pth")
+        print(f"[train] epoch {ep} done -> {out}/checkpoint_last.pth", flush=True)
+    print(f"[train] DONE radar={'ON' if radar_on else 'OFF'} -> {out}")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--smoke", action="store_true", help="synthetic 1-step training smoke test")
     ap.add_argument("--variant", default="nano", choices=["nano", "small", "medium"])
     ap.add_argument("--root", default="datasets/WaterScenes")
-    ap.add_argument("--epochs", type=int, default=5)
+    ap.add_argument("--split", default="train")
+    ap.add_argument("--resolution", type=int, default=896)
+    ap.add_argument("--epochs", type=int, default=10)
+    ap.add_argument("--batch-size", type=int, default=4)
+    ap.add_argument("--num-workers", type=int, default=8)
+    ap.add_argument("--lr", type=float, default=1e-4)
+    ap.add_argument("--det-lr-mult", type=float, default=0.1, help="detector LR = lr*this (fine-tune)")
+    ap.add_argument("--radar-off", action="store_true", help="train the RGB-only baseline arm")
+    ap.add_argument("--max-steps", type=int, default=0, help="stop after N steps (0=full; for quick tests)")
+    ap.add_argument("--output-dir", default="runs/rfdetr/fusion")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     if args.smoke:
         return _smoke(args.variant, args.device)
-    raise SystemExit("real-data training loop: TODO (wire radar/dataset.py loader); smoke first")
+    return train(args)
 
 
 if __name__ == "__main__":
