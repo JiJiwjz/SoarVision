@@ -29,7 +29,8 @@
   - 积木 ✅(`radar/fusion.py` gate=0=恒等)。**集成 ✅**(`radar/integrate.py`:0.58M 参数接进 nano 2 层 decoder,forward_post class-patch 带守卫,**雷达关闭时预测与 baseline 字节级一致=补丁无害**)。剩:radar-ON 端到端前向 + 训练收敛(=A4,rfdetr.train 喂不了 REVP,需自定义训练循环)。
   - **验收**:前向/反向不崩,能在 WaterScenes 上训练收敛。
   - **纪律**:加完跑 X1 导出冒烟(`rfdetr_export.py` + `trt_build_benchmark.py`)确认仍可转 ONNX/TRT。
-- [ ] **A4 · 多模态消融表(答辩核心)**:WaterScenes 上 RGB-only vs RGB+radar,逐条件(晴/夜/雨)对比。
+- [~] **A4 · 多模态消融表(答辩核心)**:WaterScenes 上 RGB-only vs RGB+radar,逐条件(晴/夜/雨)对比。
+  - 进度:**训练步已验证**(`radar/train_fusion.py --smoke`:复用 RF-DETR criterion/matcher,forward+loss+反传,25 雷达参数有梯度,loss=14.97)。剩:真实 WaterScenes dataloader(接 `radar/dataset.py`)+ epoch 循环 + 解压 WaterScenes + 跑 RGB vs RGB+radar 训练对比(需 GPU)。
   - **验收(硬指标)**:**融合在恶劣条件(夜/雨)上 漏检↓ ≥5% 或 mAP@50:95 ↑ ≥2 个点,且 clear 不显著掉。** 达到即"多模态真的有用"成立。
 - [ ] **A5 · 雷达稀疏化增强**:训练时随机下采样 WaterScenes 点,模拟 IWR6843 稀疏。
   - **验收**:在稀疏化测试集上 mAP 掉幅明显小于无增强(证明对我们真雷达的稀疏鲁棒)。
