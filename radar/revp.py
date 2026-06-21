@@ -41,12 +41,15 @@ class RevpNorm:
     Defaults sized for the Oculii EAGLE 77 GHz radar (200 m range). Tune once real
     histograms are seen; power uses per-frame min-max because dB offset varies."""
 
-    range_max: float = 200.0      # m  (sensor spec)
-    elev_abs: float = 30.0        # deg (4D radar elevation FOV is narrow; clip to ±)
-    doppler_abs: float = 30.0     # m/s (clip; signed → mapped to [0,1] around 0.5)
-    power_per_frame: bool = True  # min-max power within the frame
+    # Tuned to WaterScenes real histograms (500-frame sample, A2 2026-06-21):
+    # range max 201m, doppler ±11 (p1/p99 -3.1/2.5), elevation ±22 (p99 13.7),
+    # power 0-38dB (med 12). Our IWR6843 will differ — re-tune on self-captured data.
+    range_max: float = 200.0      # m  (matches WaterScenes max 201)
+    elev_abs: float = 22.0        # deg (data ±22; 4D radar elevation FOV)
+    doppler_abs: float = 12.0     # m/s (data ±11; signed → mapped to [0,1] around 0.5)
+    power_per_frame: bool = True  # min-max power within the frame (power range varies)
     power_lo: float = 0.0         # used when power_per_frame=False
-    power_hi: float = 100.0
+    power_hi: float = 40.0        # WaterScenes power tops ~38 dB
 
 
 def build_revp_map(
