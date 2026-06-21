@@ -25,7 +25,8 @@
 
 - [x] **A1 · WaterScenes 数据落地**:解压各组件 zip 到 `datasets/WaterScenes/`,跑 `radar/waterscenes.py --validate`。✅ 本地校验通过(7类/划分 train37884·val10824·test5412);**雷达点对齐确认**(frame 29543 雷达点精准落在远岸货船上,无系统偏移)。修复:`list_frames` 用 `Path().stem` 兼容 `./images/<id>.jpg` 路径格式。
 - [x] **A2 · REVP 归一化标定**:据真实直方图(500帧)调 `RevpNorm` — doppler_abs 30→12(数据±11)、elev_abs 30→22、range_max=200✓、power per-frame。每帧中位 303 点。
-- [ ] **A3 · RF-DETR decoder 雷达 cross-attention(RGQ)**:REVP 特征作 K/V,object queries 软关联(TransCAR 路线),留置信门控接口。
+- [~] **A3 · RF-DETR decoder 雷达 cross-attention(RGQ)**:REVP 特征作 K/V,object queries 软关联(TransCAR 路线),留置信门控接口。
+  - 进度:积木完成(`radar/fusion.py`:RadarEncoder + RadarCrossAttn,**gate=0=严格恒等**验证);注入点已定(图像 cross-attn 之后包裹 forward_post)。**待集成进 RF-DETR decoder**(下一步)。
   - **验收**:前向/反向不崩,能在 WaterScenes 上训练收敛。
   - **纪律**:加完跑 X1 导出冒烟(`rfdetr_export.py` + `trt_build_benchmark.py`)确认仍可转 ONNX/TRT。
 - [ ] **A4 · 多模态消融表(答辩核心)**:WaterScenes 上 RGB-only vs RGB+radar,逐条件(晴/夜/雨)对比。
